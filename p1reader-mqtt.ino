@@ -102,9 +102,6 @@ void onMqttPublish(uint16_t packetId) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.print("Version 1.0.0");
-  Serial.print("GPLv3");
-  Serial.println();
   Serial.setTimeout(500); //in ms, expected time is max 100ms
 
   wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
@@ -120,6 +117,10 @@ void setup() {
   //mqttClient.setCredentials("REPlACE_WITH_YOUR_USER", "REPLACE_WITH_YOUR_PASSWORD");
   
   connectToWifi();
+
+  Serial.println();
+  Serial.println("Version 1.0.1");
+  Serial.println("GPLv3");
 }
 
 void publish(char *t, char *v) {
