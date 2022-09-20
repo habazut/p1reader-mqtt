@@ -20,6 +20,15 @@
   This was inspired by works from Rui Santos
   Complete project details at https://RandomNerdTutorials.com/esp8266-nodemcu-mqtt-publish-ds18b20-
 */
+#define TEMPERATURE
+#define VERBOSE_SEND
+//#define VERBOSE_OK
+//#define VERBOSE_IN
+
+#ifdef TEMPERATURE
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#endif
 
 #include <ESP8266WiFi.h>
 #include <Ticker.h>
@@ -34,8 +43,35 @@
 //#define MQTT_HOST "example.com"
 #define MQTT_PORT 1883
 
+// Electrical meter MQTT Topic
+#define MQTT_PUB "tingfast45/electric/meter/"
+
+#ifdef TEMPERATURE
+
 // Temperature MQTT Topics
-#define MQTT_PUB "tingfast45/electric/"
+#define MQTT_PUB_TEMP "tingfast45/elmeterESP/temperature/"
+
+// GPIO where the DS18B20 is connected to
+const int oneWireBus = 4;          
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWire(oneWireBus);
+int numberOfDevices = 0;
+
+// Pass our oneWire reference to Dallas Temperature sensor 
+DallasTemperature sensors(&oneWire);
+// Temperature value
+float temp;
+
+// function to print a temperature device address
+void printAddress(DeviceAddress deviceAddress) {
+  for (uint8_t i = 0; i < 8; i++){
+    if (deviceAddress[i] < 16) Serial.print("0");
+      Serial.print(deviceAddress[i], HEX);
+  }
+}
+
+#endif
+
 
 AsyncMqttClient mqttClient;
 Ticker mqttReconnectTimer;
@@ -50,11 +86,13 @@ void connectToWifi() {
 }
 
 void onWifiConnect(const WiFiEventStationModeGotIP& event) {
+  (void)event;
   Serial.println("Connected to Wi-Fi.");
   connectToMqtt();
 }
 
 void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
+  (void)event;
   Serial.println("Disconnected from Wi-Fi.");
   mqttReconnectTimer.detach(); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
   wifiReconnectTimer.once(2, connectToWifi);
@@ -72,6 +110,7 @@ void onMqttConnect(bool sessionPresent) {
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  (void)reason;
   Serial.println("Disconnected from MQTT.");
 
   if (WiFi.isConnected()) {
@@ -94,13 +133,46 @@ void onMqttUnsubscribe(uint16_t packetId) {
 }*/
 
 void onMqttPublish(uint16_t packetId) {
-#ifdef VERBOSE
+  (void)packetId;
+#ifdef VERBOSE_OK
   Serial.print("Pub OK packetId: ");
   Serial.println(packetId);
 #endif
 }
 
+#ifdef TEMPERATURE
+DeviceAddress allDevices[10]; 
+#endif
+
 void setup() {
+  Serial.begin(115200);
+  Serial.setTimeout(500); //in ms, expected time is max 100ms
+
+#ifdef TEMPERATURE
+  DeviceAddress tempDeviceAddress; 
+  sensors.begin();
+  // Init Sensors
+  numberOfDevices = sensors.getDeviceCount();
+  Serial.println(numberOfDevices);
+  int found=0;
+  for(int i=0;i<numberOfDevices && found < 10; i++){
+    // Search the wire for address
+      if(sensors.getAddress(allDevices[found], i)){
+	  Serial.print("Found device ");
+	  Serial.print(i, DEC);
+	  Serial.print(" with address: ");
+	  printAddress(allDevices[found]);
+	  found++;
+	  Serial.println();
+      } else {
+	  Serial.print("Found ghost device at ");
+	  Serial.print(i, DEC);
+	  Serial.print(" but could not detect address. Check power and cabling");
+      }
+  }
+  numberOfDevices = found;
+#endif
+  
   Serial.begin(115200);
   Serial.setTimeout(500); //in ms, expected time is max 100ms
 
@@ -119,15 +191,28 @@ void setup() {
   connectToWifi();
 
   Serial.println();
-  Serial.println("Version 1.0.1");
+  Serial.println("Version 1.1.0");
   Serial.println("GPLv3");
 }
+#ifdef TEMPERATURE
+void temploop() {
+  uint16_t packetIdPub1 = 0;
+  sensors.requestTemperatures(); 
+  for(int i=0; i<numberOfDevices; i++){
+    // Temperature in Celsius degrees
+    temp = sensors.getTempC(allDevices[i]);
+    String str = String(MQTT_PUB_TEMP) + String(i);
+    packetIdPub1 = mqttClient.publish(str.c_str(), 1, true, String(temp).c_str());
+    Serial.printf("Pub topic %s packetId: %i val %.2f\n", str.c_str(), packetIdPub1, temp);
+  }
+}
+#endif
 
 void publish(char *t, char *v) {
   uint16_t packetIdPub1 = 0;
   String str = String(MQTT_PUB) + String(t);
   packetIdPub1 = mqttClient.publish(str.c_str(), 1, true, v);
-#ifdef VERBOSE
+#ifdef VERBOSE_SEND
   Serial.printf("Pub topic %s, packetId: %i val %s\n", str.c_str(), packetIdPub1, v);
 #endif
 }
@@ -142,11 +227,13 @@ void loop() {
   char *s;
   if ((len=Serial.readBytes(inbuf, 1023)) > 0) {
     inbuf[len] = 0;
+#ifdef VERBOSE_IN
     Serial.print("len=");
     Serial.print(len);
     Serial.print(" ");
     Serial.write(inbuf,len);
     Serial.println();
+#endif
     s = inbuf;
     if ((needle = strstr(inbuf, "0-0:"))) {
       needle[0] = 0;
@@ -163,10 +250,16 @@ void loop() {
       value = strtok(NULL,")");
       publish(ident, value);
     }
-  } //else {
-    //    Serial.print("Timeout");
-    //Serial.println();
-    //}
+  } else {
+    //Serial.println("Timeout");
+    delay(20);
+  }
   delay(20);
-  //ESP.deepSleep(5 * 60 * 1000000L); // 5 min
+#ifdef TEMPERATURE
+  static unsigned long timestamp = 0;
+  if(millis() - timestamp > 60000) {
+    timestamp = millis();
+    temploop();
+  }
+#endif
 }
